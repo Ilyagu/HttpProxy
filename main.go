@@ -1,154 +1,184 @@
 package main
 
 import (
-	"fmt"
+	"bufio"
+	"crypto/tls"
+	"errors"
+	"io"
 	"log"
+	"math/rand"
 	"net"
+	"net/http"
+	"net/http/httputil"
+	"os"
+	"os/exec"
+	"strconv"
 	"strings"
-	"time"
 )
 
-const (
-	BUFFERLENGTH = 256
-)
+func getCert(host string) (tls.Certificate, error) {
+	_, err := os.Stat("certs/" + host + ".crt")
+	if os.IsNotExist(err) {
+		genCommand := exec.Command("gen_cert.sh", host, strconv.Itoa(rand.Intn(1000)))
+		_, err = genCommand.CombinedOutput()
+		if err != nil {
+			log.Println(err)
+			return tls.Certificate{}, err
+		}
+	}
 
-type HttpRequest struct {
-	Method      string
-	Schema      string
-	HostAndPort string
-	Path        string
-	Headers     string
-	Body        string
+	tlsCert, err := tls.LoadX509KeyPair("certs/"+host+".crt", "cert.key")
+	if err != nil {
+		log.Println("error loading pair", err)
+		return tls.Certificate{}, err
+	}
+
+	return tlsCert, nil
+}
+
+func connectHandle(w http.ResponseWriter) (net.Conn, error) {
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		return nil, errors.New("Hijacking not supported")
+	}
+
+	httpsConn, _, err := hijacker.Hijack()
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = httpsConn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+	if err != nil {
+		httpsConn.Close()
+		return nil, err
+	}
+
+	return httpsConn, nil
+}
+
+func createTcpClientWithTlsConfig(r *http.Request, httpsConn net.Conn) (*tls.Conn, *tls.Config, error) {
+	host := strings.Split(r.Host, ":")[0]
+
+	caCert, err := getCert(host)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{caCert},
+		ServerName:   r.URL.Scheme,
+	}
+
+	tcpClient := tls.Server(httpsConn, tlsConfig)
+	err = tcpClient.Handshake()
+	if err != nil {
+		tcpClient.Close()
+		return nil, nil, err
+	}
+
+	return tcpClient, tlsConfig, nil
+}
+
+func proxyHttpsRequest(tcpClient *tls.Conn, tcpServer *tls.Conn) error {
+	clientReader := bufio.NewReader(tcpClient)
+	request, err := http.ReadRequest(clientReader)
+	if err != nil {
+		return err
+	}
+
+	dumpRequest, err := httputil.DumpRequest(request, true)
+	if err != nil {
+		return err
+	}
+	_, err = tcpServer.Write(dumpRequest)
+	if err != nil {
+		return err
+	}
+
+	serverReader := bufio.NewReader(tcpServer)
+	response, err := http.ReadResponse(serverReader, request)
+	if err != nil {
+		return err
+	}
+
+	rawResponse, err := httputil.DumpResponse(response, true)
+	if err != nil {
+		return err
+	}
+
+	_, err = tcpClient.Write(rawResponse)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func httpsHandle(w http.ResponseWriter, r *http.Request) {
+	httpsConn, err := connectHandle(w)
+	if err != nil {
+		log.Println(err)
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer httpsConn.Close()
+
+	tcpClient, tlsConfig, err := createTcpClientWithTlsConfig(r, httpsConn)
+	if err != nil {
+		log.Println(err)
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer tcpClient.Close()
+
+	tcpServer, err := tls.Dial("tcp", r.URL.Host, tlsConfig)
+	if err != nil {
+		log.Println(err)
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer tcpServer.Close()
+
+	err = proxyHttpsRequest(tcpClient, tcpServer)
+	if err != nil {
+		log.Println(err)
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+}
+
+func httpHandle(w http.ResponseWriter, r *http.Request) {
+	response, err := http.DefaultTransport.RoundTrip(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer response.Body.Close()
+
+	for key, values := range response.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	w.WriteHeader(response.StatusCode)
+	_, err = io.Copy(w, response.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 func main() {
-	ln, err := net.Listen("tcp", ":8080")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer ln.Close()
-
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			log.Fatal(err)
-		}
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		go proxyHandler(conn)
-	}
-}
-
-func proxyHandler(conn net.Conn) {
-	var request []byte
-	requestLength := 0
-	for {
-		resHeaderBytes := make([]byte, BUFFERLENGTH)
-		numberOfBytes, err := conn.Read(resHeaderBytes)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		requestLength += numberOfBytes
-		request = append(request, resHeaderBytes...)
-
-		if numberOfBytes < BUFFERLENGTH {
-			request = request[:requestLength]
-			break
-		}
+	server := http.Server{
+		Addr: ":8080",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodConnect {
+				httpsHandle(w, r)
+			} else {
+				httpHandle(w, r)
+			}
+		}),
 	}
 
-	httpRequest, _ := parseHttpRequest(string(request))
-
-	response := mainHandler(httpRequest)
-
-	fmt.Println(string(response))
-	_, err := conn.Write([]byte(response))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	conn.Close()
-}
-
-func remove(slice []string, s int) []string {
-	return append(slice[:s], slice[s+1:]...)
-}
-
-func parseHttpRequest(request string) (HttpRequest, error) {
-	var httpRequest HttpRequest
-	requestHeaderAndBody := strings.Split(request, "\r\n\r\n")
-
-	header := requestHeaderAndBody[0]
-
-	headerStrs := strings.Split(header, "\r\n")
-
-	firstStr := strings.Split(headerStrs[0], " ")
-	fmt.Println(firstStr)
-	schemaHostPath := strings.Split(firstStr[1], "/")
-	fmt.Println(schemaHostPath)
-
-	headers := headerStrs[2:]
-
-	var headersNoProxy []string
-	for idx, lol := range headers {
-		if strings.Contains(lol, "Proxy-Connection") {
-			headersNoProxy = remove(headers, idx)
-			break
-		}
-	}
-
-	httpRequest.Body = requestHeaderAndBody[1]
-	httpRequest.Method = firstStr[0]
-	httpRequest.Schema = schemaHostPath[0]
-	httpRequest.HostAndPort = schemaHostPath[2]
-	httpRequest.Path = "/" + schemaHostPath[3]
-	httpRequest.Headers = strings.Join(headersNoProxy, "\r\n")
-
-	return httpRequest, nil
-}
-
-func mainHandler(httpRequest HttpRequest) string {
-	var port string
-	hostAndPort := strings.Split(httpRequest.HostAndPort, ":")
-	host := hostAndPort[0]
-	if len(hostAndPort) > 1 {
-		port = ":" + hostAndPort[1]
-	} else {
-		port = ":80"
-	}
-	connProxy, err := net.Dial("tcp", host+port)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer connProxy.Close()
-
-	requestOptions := fmt.Sprintf("%s %s HTTP/1.1\r\nHost: %s\r\n", httpRequest.Method, httpRequest.Path, httpRequest.HostAndPort)
-
-	request := requestOptions + httpRequest.Headers + "\r\n\r\n" + httpRequest.Body
-
-	fmt.Println(string(request))
-	_, err = connProxy.Write([]byte(request))
-	if err != nil {
-		log.Fatal(err)
-	}
-	time.Sleep(time.Duration(100) * time.Millisecond)
-	var response []byte
-	for {
-		resHeaderBytes := make([]byte, BUFFERLENGTH)
-		numberOfBytes, err := connProxy.Read(resHeaderBytes)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		response = append(response, resHeaderBytes...)
-
-		if numberOfBytes < BUFFERLENGTH {
-			break
-		}
-	}
-
-	return string(response)
+	log.Fatal(server.ListenAndServe())
 }
