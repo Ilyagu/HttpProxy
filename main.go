@@ -16,6 +16,14 @@ import (
 	"strings"
 )
 
+const (
+	SUCCESSCONNECT = "HTTP/1.1 200 Connection established\r\n\r\n"
+)
+
+var (
+	ErrHijackingNotSupported = errors.New("Hijacking not supported")
+)
+
 func getCert(host string) (tls.Certificate, error) {
 	_, err := os.Stat("certs/" + host + ".crt")
 	if os.IsNotExist(err) {
@@ -39,7 +47,7 @@ func getCert(host string) (tls.Certificate, error) {
 func connectHandle(w http.ResponseWriter) (net.Conn, error) {
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
-		return nil, errors.New("Hijacking not supported")
+		return nil, ErrHijackingNotSupported
 	}
 
 	httpsConn, _, err := hijacker.Hijack()
@@ -47,7 +55,7 @@ func connectHandle(w http.ResponseWriter) (net.Conn, error) {
 		return nil, err
 	}
 
-	_, err = httpsConn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+	_, err = httpsConn.Write([]byte(SUCCESSCONNECT))
 	if err != nil {
 		httpsConn.Close()
 		return nil, err
