@@ -36,7 +36,6 @@ func getCert(host string) (tls.Certificate, error) {
 		genCommand := exec.Command(rootDir+GENSRTDIR, host, strconv.Itoa(rand.Intn(100000)))
 		_, err = genCommand.CombinedOutput()
 		if err != nil {
-			log.Println("AAAAAAAAAAAAAAAAA")
 			return tls.Certificate{}, err
 		}
 	}
