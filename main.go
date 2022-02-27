@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"math/rand"
@@ -17,27 +18,31 @@ import (
 )
 
 const (
+	PORT           = ":8080"
+	GENSRTDIR      = "/gen_cert.sh"
+	CERTKEY        = "cert.key"
 	SUCCESSCONNECT = "HTTP/1.1 200 Connection established\r\n\r\n"
 )
 
 var (
-	ErrHijackingNotSupported = errors.New("Hijacking not supported")
+	ErrHijackingNotSupported = errors.New("hijacking not supported")
 )
 
 func getCert(host string) (tls.Certificate, error) {
-	_, err := os.Stat("certs/" + host + ".crt")
+	rootDir, _ := os.Getwd()
+	_, err := os.Stat(fmt.Sprintf("%s/certs/%s.crt", rootDir, host))
+	log.Println(fmt.Sprintf("%s/certs/%s.crt", rootDir, host))
 	if os.IsNotExist(err) {
-		genCommand := exec.Command("gen_cert.sh", host, strconv.Itoa(rand.Intn(1000)))
+		genCommand := exec.Command(rootDir+GENSRTDIR, host, strconv.Itoa(rand.Intn(100000)))
 		_, err = genCommand.CombinedOutput()
 		if err != nil {
-			log.Println(err)
+			log.Println("AAAAAAAAAAAAAAAAA")
 			return tls.Certificate{}, err
 		}
 	}
 
-	tlsCert, err := tls.LoadX509KeyPair("certs/"+host+".crt", "cert.key")
+	tlsCert, err := tls.LoadX509KeyPair(fmt.Sprintf("%s/certs/%s.crt", rootDir, host), CERTKEY)
 	if err != nil {
-		log.Println("error loading pair", err)
 		return tls.Certificate{}, err
 	}
 
@@ -69,6 +74,7 @@ func createTcpClientWithTlsConfig(r *http.Request, httpsConn net.Conn) (*tls.Con
 
 	caCert, err := getCert(host)
 	if err != nil {
+		log.Println(err)
 		return nil, nil, err
 	}
 
@@ -122,7 +128,7 @@ func proxyHttpsRequest(tcpClient *tls.Conn, tcpServer *tls.Conn) error {
 	return nil
 }
 
-func httpsHandle(w http.ResponseWriter, r *http.Request) {
+func secureHandle(w http.ResponseWriter, r *http.Request) {
 	httpsConn, err := connectHandle(w)
 	if err != nil {
 		log.Println(err)
@@ -178,10 +184,10 @@ func httpHandle(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	server := http.Server{
-		Addr: ":8080",
+		Addr: PORT,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodConnect {
-				httpsHandle(w, r)
+				secureHandle(w, r)
 			} else {
 				httpHandle(w, r)
 			}
