@@ -1,12 +1,13 @@
 package delivery
 
 import (
-	"compress/gzip"
+	"bufio"
 	"crypto/tls"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/http/httputil"
 
 	"github.com/sirupsen/logrus"
 
@@ -80,12 +81,58 @@ func (p *Proxy) SecureHandle(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tcpServer.Close()
 
-	err = pkg.ProxyHttpsRequest(tcpClient, tcpServer)
+	err = p.ProxyHttpsRequest(tcpClient, tcpServer)
 	if err != nil {
 		log.Println(err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+}
+
+func (p *Proxy) ProxyHttpsRequest(tcpClient *tls.Conn, tcpServer *tls.Conn) error {
+	clientReader := bufio.NewReader(tcpClient)
+	request, err := http.ReadRequest(clientReader)
+	if err != nil {
+		return err
+	}
+
+	body, _ := ioutil.ReadAll(request.Body)
+	savingReq := &models.Request{
+		Method:  request.Method,
+		Host:    request.Host,
+		Path:    request.URL.Path,
+		Headers: request.Header,
+		Body:    string(body),
+	}
+
+	p.rep.SaveRequest(savingReq)
+
+	dumpRequest, err := httputil.DumpRequest(request, true)
+	if err != nil {
+		return err
+	}
+	_, err = tcpServer.Write(dumpRequest)
+	if err != nil {
+		return err
+	}
+
+	serverReader := bufio.NewReader(tcpServer)
+	response, err := http.ReadResponse(serverReader, request)
+	if err != nil {
+		return err
+	}
+
+	rawResponse, err := httputil.DumpResponse(response, true)
+	if err != nil {
+		return err
+	}
+
+	_, err = tcpClient.Write(rawResponse)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (p *Proxy) HttpHandle(w http.ResponseWriter, r *http.Request) {
@@ -109,76 +156,76 @@ func (p *Proxy) HttpHandle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	decodedResponse, err := DecodeResponse(response)
-	log.Println(err)
-	log.Println(string(decodedResponse))
+	// decodedResponse, err := DecodeResponse(response)
+	// log.Println(err)
+	// log.Println(string(decodedResponse))
 }
 
-func (p *Proxy) HandleHTTPRequest(w http.ResponseWriter, r *http.Request) (string, error) {
-	proxyResponse, err := p.DoHttpRequest(r)
-	if err != nil {
-		logrus.Info(err)
-	}
-	for header, values := range proxyResponse.Header {
-		for _, value := range values {
-			w.Header().Add(header, value)
-		}
-	}
-	w.WriteHeader(proxyResponse.StatusCode)
-	_, err = io.Copy(w, proxyResponse.Body)
-	if err != nil {
-		logrus.Info(err)
-	}
-	defer proxyResponse.Body.Close()
+// func (p *Proxy) HandleHTTPRequest(w http.ResponseWriter, r *http.Request) (string, error) {
+// 	proxyResponse, err := p.DoHttpRequest(r)
+// 	if err != nil {
+// 		logrus.Info(err)
+// 	}
+// 	for header, values := range proxyResponse.Header {
+// 		for _, value := range values {
+// 			w.Header().Add(header, value)
+// 		}
+// 	}
+// 	w.WriteHeader(proxyResponse.StatusCode)
+// 	_, err = io.Copy(w, proxyResponse.Body)
+// 	if err != nil {
+// 		logrus.Info(err)
+// 	}
+// 	defer proxyResponse.Body.Close()
 
-	decodedResponse, err := DecodeResponse(proxyResponse)
-	if err != nil {
-		return "", err
-	}
+// 	decodedResponse, err := DecodeResponse(proxyResponse)
+// 	if err != nil {
+// 		return "", err
+// 	}
 
-	return string(decodedResponse), nil
-}
+// 	return string(decodedResponse), nil
+// }
 
-func (p *Proxy) DoHttpRequest(r *http.Request) (*http.Response, error) {
-	request, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
-	if err != nil {
-		return nil, err
-	}
+// func (p *Proxy) DoHttpRequest(r *http.Request) (*http.Response, error) {
+// 	request, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-	request.Header = r.Header
+// 	request.Header = r.Header
 
-	proxyResponse, err := http.DefaultTransport.RoundTrip(request)
-	if err != nil {
-		return nil, err
-	}
+// 	proxyResponse, err := http.DefaultTransport.RoundTrip(request)
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-	return proxyResponse, nil
-}
+// 	return proxyResponse, nil
+// }
 
-func DecodeResponse(response *http.Response) ([]byte, error) {
-	var body io.ReadCloser
+// func DecodeResponse(response *http.Response) ([]byte, error) {
+// 	var body io.ReadCloser
 
-	switch response.Header.Get("Content-Encoding") {
-	case "gzip":
-		var err error
-		body, err = gzip.NewReader(response.Body)
-		if err != nil {
-			body = response.Body
-		}
-	default:
-		body = response.Body
-	}
+// 	switch response.Header.Get("Content-Encoding") {
+// 	case "gzip":
+// 		var err error
+// 		body, err = gzip.NewReader(response.Body)
+// 		if err != nil {
+// 			body = response.Body
+// 		}
+// 	default:
+// 		body = response.Body
+// 	}
 
-	bodyByte, err := ioutil.ReadAll(body)
-	if err != nil {
-		return nil, err
-	}
+// 	bodyByte, err := ioutil.ReadAll(body)
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-	lineBreak := []byte("\n")
-	bodyByte = append(bodyByte, lineBreak...)
-	bodyByte = bodyByte[0:500]
+// 	lineBreak := []byte("\n")
+// 	bodyByte = append(bodyByte, lineBreak...)
+// 	bodyByte = bodyByte[0:500]
 
-	defer body.Close()
+// 	defer body.Close()
 
-	return bodyByte, nil
-}
+// 	return bodyByte, nil
+// }

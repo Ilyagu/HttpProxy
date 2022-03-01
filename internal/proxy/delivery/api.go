@@ -68,7 +68,7 @@ func (api *Api) RepeatRequest(w http.ResponseWriter, r *http.Request) {
 		Header: request.Headers,
 	}
 
-	api.proxy.HandleHTTPRequest(w, req)
+	api.proxy.HttpHandle(w, req)
 }
 
 func (api *Api) GetRequest(w http.ResponseWriter, r *http.Request) {

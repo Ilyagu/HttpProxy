@@ -1,7 +1,6 @@
 package pkg
 
 import (
-	"bufio"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"os"
 	"os/exec"
 	"strconv"
@@ -87,39 +85,4 @@ func CreateTcpClientWithTlsConfig(r *http.Request, httpsConn net.Conn) (*tls.Con
 	}
 
 	return tcpClient, tlsConfig, nil
-}
-
-func ProxyHttpsRequest(tcpClient *tls.Conn, tcpServer *tls.Conn) error {
-	clientReader := bufio.NewReader(tcpClient)
-	request, err := http.ReadRequest(clientReader)
-	if err != nil {
-		return err
-	}
-
-	dumpRequest, err := httputil.DumpRequest(request, true)
-	if err != nil {
-		return err
-	}
-	_, err = tcpServer.Write(dumpRequest)
-	if err != nil {
-		return err
-	}
-
-	serverReader := bufio.NewReader(tcpServer)
-	response, err := http.ReadResponse(serverReader, request)
-	if err != nil {
-		return err
-	}
-
-	rawResponse, err := httputil.DumpResponse(response, true)
-	if err != nil {
-		return err
-	}
-
-	_, err = tcpClient.Write(rawResponse)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
