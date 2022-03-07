@@ -21,11 +21,12 @@ func (db *DB) SaveRequest(req *models.Request) error {
 		return err
 	}
 
-	query := `insert into requests (method, host, path, headers, body)
-			values ($1, $2, $3, $4, $5) returning id`
+	query := `insert into requests (method, scheme, host, path, headers, body)
+			values ($1, $2, $3, $4, $5, $6) returning id`
 
 	err = db.con.QueryRow(query,
 		req.Method,
+		req.Scheme,
 		req.Host,
 		req.Path,
 		string(headers),
@@ -35,7 +36,7 @@ func (db *DB) SaveRequest(req *models.Request) error {
 }
 
 func (db *DB) GetAllRequests() ([]*models.Request, error) {
-	query := `select id, method, host, path, headers, body from requests`
+	query := `select id, method, scheme, host, path, headers, body from requests`
 
 	row, err := db.con.Query(query)
 	if err != nil {
@@ -48,7 +49,7 @@ func (db *DB) GetAllRequests() ([]*models.Request, error) {
 		request := &models.Request{}
 		b := make([]byte, 0)
 
-		row.Scan(&request.Id, &request.Method, &request.Host, &request.Path,
+		row.Scan(&request.Id, &request.Method, &request.Scheme, &request.Host, &request.Path,
 			&b, &request.Body)
 
 		json.Unmarshal(b, &request.Headers)
@@ -60,13 +61,13 @@ func (db *DB) GetAllRequests() ([]*models.Request, error) {
 }
 
 func (db *DB) GetRequest(id int) (*models.Request, error) {
-	query := `select id, method, host, path, headers, body from requests
+	query := `select id, method, scheme, host, path, headers, body from requests
 			where id = $1`
 
 	request := &models.Request{}
 	b := make([]byte, 0)
 
-	err := db.con.QueryRow(query, id).Scan(&request.Id, &request.Method, &request.Host,
+	err := db.con.QueryRow(query, id).Scan(&request.Id, &request.Method, &request.Scheme, &request.Host,
 		&request.Path, &b, &request.Body)
 
 	if err != nil {

@@ -59,7 +59,7 @@ func (api *Api) RepeatRequest(w http.ResponseWriter, r *http.Request) {
 	req := &http.Request{
 		Method: request.Method,
 		URL: &url.URL{
-			Scheme: "http",
+			Scheme: request.Scheme,
 			Host:   request.Host,
 			Path:   request.Path,
 		},
@@ -68,7 +68,11 @@ func (api *Api) RepeatRequest(w http.ResponseWriter, r *http.Request) {
 		Header: request.Headers,
 	}
 
-	api.proxy.HttpHandle(w, req)
+	if request.Scheme == "https" {
+		api.proxy.SecureHandle(w, req)
+	} else {
+		api.proxy.HttpHandle(w, req)
+	}
 }
 
 func (api *Api) GetRequest(w http.ResponseWriter, r *http.Request) {
