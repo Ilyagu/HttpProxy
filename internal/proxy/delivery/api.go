@@ -68,8 +68,8 @@ func (api *Api) RepeatRequest(w http.ResponseWriter, r *http.Request) {
 		Header: request.Headers,
 	}
 
-	if request.Scheme == "https" {
-		api.proxy.SecureHandle(w, req)
+	if request.Scheme == "" {
+		api.proxy.SecureHandle(w, req, true)
 	} else {
 		api.proxy.HttpHandle(w, req)
 	}

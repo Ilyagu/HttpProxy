@@ -6,7 +6,6 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
 	"net/http/httputil"
 
@@ -31,10 +30,6 @@ func NewProxy(rep *repositiory.DB) *Proxy {
 func (p *Proxy) HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 	body, _ := ioutil.ReadAll(r.Body)
 
-	if r.URL.Scheme == "" {
-		r.URL.Scheme = "https"
-	}
-
 	req := &models.Request{
 		Method:  r.Method,
 		Scheme:  r.URL.Scheme,
@@ -52,7 +47,7 @@ func (p *Proxy) HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodConnect {
-		p.SecureHandle(w, r)
+		p.SecureHandle(w, r, false)
 	} else {
 		p.HttpHandle(w, r)
 	}
@@ -62,17 +57,14 @@ func (p *Proxy) HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 	// }
 }
 
-func (p *Proxy) SecureHandle(w http.ResponseWriter, r *http.Request) {
-	var httpsConn net.Conn
-	if r.URL.Scheme == "https" {
-		httpsConn, err := pkg.ConnectHandle(w)
-		if err != nil {
-			log.Println(err)
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
-			return
-		}
-		defer httpsConn.Close()
+func (p *Proxy) SecureHandle(w http.ResponseWriter, r *http.Request, repeat bool) {
+	httpsConn, err := pkg.ConnectHandle(w)
+	if err != nil {
+		log.Println(err)
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
 	}
+	defer httpsConn.Close()
 
 	tcpClient, tlsConfig, err := pkg.CreateTcpClientWithTlsConfig(r, httpsConn)
 	if err != nil {
