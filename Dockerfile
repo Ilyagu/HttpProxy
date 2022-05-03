@@ -19,7 +19,7 @@ COPY ./internal/init.sql .
 RUN service postgresql start && \
     psql -c "CREATE USER ilyagu WITH superuser login password 'password';" && \
     psql -c "ALTER ROLE ilyagu WITH PASSWORD 'password';" && \
-    createdb -O ilyagu proxy && \
+    createdb -O ilyagu proxydb && \
     psql -d proxydb < ./init.sql && \
     service postgresql stop
 
